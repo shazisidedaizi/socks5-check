@@ -14,16 +14,18 @@ import (
 
 // ====================== API 结果结构 ======================
 type CheckResp struct {
-	Success bool   `json:"success"` // API 返回 success 字段
-	Proxy   string `json:"proxy"`
-	Country string `json:"country"`
-	Delay   int `json:"elapsed_ms"`
-	Company struct {
-		Type string `json:"type"`
-	} `json:"company"`
-	ASN struct {
-		Type string `json:"type"`
-	} `json:"asn"`
+    Success bool   `json:"success"`
+    Proxy   string `json:"proxy"`
+    Country string `json:"country_code"`  
+    Delay   int    `json:"elapsed_ms"`    
+
+    Company struct {
+        Type string `json:"type"`
+    } `json:"company"`
+
+    ASN struct {
+        Type string `json:"type"`
+    } `json:"asn"`
 }
 
 // ====================== TG 发送函数 ======================
