@@ -8,25 +8,32 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # 拉取仓库代码
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # 安装 Go
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
           go-version: '1.24'
           cache: true
 
+      # 查看 Go 版本（可选，便于调试）
+      - name: Show Go version
+        run: go version
+
+      # 下载依赖并构建二进制
       - name: Build binary
         run: |
           go mod tidy
           go build -o checker .
 
+      # 运行程序
       - name: Run checker
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
           API_TOKEN: ${{ secrets.API_TOKEN }}
           NODES_URL: ${{ secrets.NODES_URL }}
-        run: |
-          ./checker
+        run: ./checker
