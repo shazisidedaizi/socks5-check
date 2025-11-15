@@ -14,17 +14,21 @@ import (
 
 // ====================== API 结果结构 ======================
 type CheckResp struct {
-	Ok      bool   `json:"ok"`
+	Success bool   `json:"success"` // API 返回 success 字段
+	Proxy   string `json:"proxy"`
 	Country string `json:"country"`
-	Delay   int    `json:"delay"`
+	Delay   int `json:"elapsed_ms"`
+	Company struct {
+		Type string `json:"type"`
+	} `json:"company"`
+	ASN struct {
+		Type string `json:"type"`
+	} `json:"asn"`
 }
 
 // ====================== TG 发送函数 ======================
 func sendTelegramMessage(botToken, chatId, text string) error {
-	apiURL := fmt.Sprintf(
-		"https://api.telegram.org/bot%s/sendMessage",
-		botToken,
-	)
+	apiURL := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
 	data := url.Values{}
 	data.Set("chat_id", chatId)
 	data.Set("text", text)
@@ -47,7 +51,6 @@ func fetchNodesFromURL(rawURL string) ([]string, error) {
 
 	var nodes []string
 	reader := bufio.NewReader(resp.Body)
-
 	for {
 		line, _, err := reader.ReadLine()
 		if err == io.EOF {
@@ -56,32 +59,52 @@ func fetchNodesFromURL(rawURL string) ([]string, error) {
 		if err != nil {
 			return nil, err
 		}
-
 		trim := strings.TrimSpace(string(line))
-		if trim == "" {
-			continue
+		if trim != "" {
+			nodes = append(nodes, trim)
 		}
-		nodes = append(nodes, trim)
 	}
 	return nodes, nil
 }
 
-// ====================== 调用 API 检测 ======================
-func checkProxy(proxy, apiToken string) (CheckResp, error) {
+// ====================== 调用 API 检测，带 3 次指数退避 ======================
+func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 	api := fmt.Sprintf(
 		"https://check.xn--xg8h.netlib.re/check?proxy=%s&token=%s",
-		url.QueryEscape(proxy), apiToken,
+		url.QueryEscape(proxyStr), apiToken,
 	)
-
 	client := &http.Client{Timeout: 15 * time.Second}
-	resp, err := client.Get(api)
-	if err != nil {
-		return CheckResp{}, err
-	}
-	defer resp.Body.Close()
 
 	var result CheckResp
-	err = json.NewDecoder(resp.Body).Decode(&result)
+	var err error
+
+	maxRetries := 3
+	baseDelay := 2 * time.Second
+
+	for attempt := 1; attempt <= maxRetries; attempt++ {
+		resp, e := client.Get(api)
+		if e != nil {
+			err = e
+			fmt.Printf("请求失败 (%d/%d): %s\n", attempt, maxRetries, proxyStr)
+		} else {
+			err = json.NewDecoder(resp.Body).Decode(&result)
+			resp.Body.Close()
+			if err == nil && result.Success {
+				break
+			}
+			if err == nil && !result.Success {
+				fmt.Printf("节点无效 (%d/%d): %s\n", attempt, maxRetries, proxyStr)
+			}
+		}
+
+		// 如果未成功且还有剩余重试次数，指数退避等待
+		if attempt < maxRetries {
+			wait := baseDelay * (1 << (attempt - 1)) // 2^0, 2^1, 2^2 秒
+			fmt.Printf("等待 %v 后重试...\n", wait)
+			time.Sleep(wait)
+		}
+	}
+
 	return result, err
 }
 
@@ -107,12 +130,21 @@ func main() {
 	var good []string
 	for _, node := range nodes {
 		resp, err := checkProxy(node, apiToken)
-		if err != nil {
+		if err != nil || !resp.Success {
+			fmt.Printf("❌ 节点无效或请求失败: %s\n", node)
 			continue
 		}
-		if resp.Ok {
-			good = append(good, fmt.Sprintf("%s  %dms  %s", node, resp.Delay, resp.Country))
+
+		// 只要 company.type 或 asn.type 中有一个为 "isp" 就保留
+		if resp.Company.Type != "isp" && resp.ASN.Type != "isp" {
+			fmt.Printf("❌ 不是 ISP，跳过: %s\n", node)
+			continue
 		}
+
+		// 格式化输出：socks5://username:password@host:port#country
+		line := fmt.Sprintf("%s#%s", resp.Proxy, resp.Country)
+		fmt.Printf("✅ 有效节点: %s\n", line)
+		good = append(good, line)
 	}
 
 	// 拼接消息
