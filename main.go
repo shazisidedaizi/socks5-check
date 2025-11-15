@@ -15,18 +15,18 @@ import (
 
 // ====================== API 结果结构 ======================
 type CheckResp struct {
-	Success bool    `json:"success"`
-	Proxy   string  `json:"proxy"`
-	Country string  `json:"country_code"`
-	Delay   float64 `json:"elapsed_ms"` // 必须 float64！
-
-	Company struct {
-		Type string `json:"type"`
-	} `json:"company"`
-
-	ASN struct {
-		Type string `json:"type"`
-	} `json:"asn"`
+    Success bool   `json:"success"`
+    Proxy   string `json:"proxy"`
+    Delay   float64 `json:"elapsed_ms"`
+    Company struct {
+        Type string `json:"type"`
+    } `json:"company"`
+    ASN struct {
+        Type string `json:"type"`
+    } `json:"asn"`
+    Location struct {
+        CountryCode string `json:"country_code"`
+    } `json:"location"`
 }
 
 // ====================== TG 发送函数 ======================
@@ -205,7 +205,7 @@ func main() {
 			continue
 		}
 
-		line := fmt.Sprintf("%s#%s", resp.Proxy, resp.Country)
+		line := fmt.Sprintf("%s#%s", resp.Proxy, resp.Location.CountryCode)
 		fmt.Printf("有效节点: %s (延迟: %.0fms)\n", line, resp.Delay)
 
 		results = append(results, NodeResult{
