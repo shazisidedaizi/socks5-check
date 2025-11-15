@@ -8,16 +8,17 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"time"
 )
 
 // ====================== API 结果结构 ======================
 type CheckResp struct {
-	Success bool   `json:"success"`
-	Proxy   string `json:"proxy"`
-	Country string `json:"country_code"` // 正确取 TR, US, JP...
-	Delay   int    `json:"elapsed_ms"`   // 延迟（毫秒），建议保留
+	Success bool    `json:"success"`
+	Proxy   string  `json:"proxy"`
+	Country string  `json:"country_code"`
+	Delay   float64 `json:"elapsed_ms"` // 必须 float64！
 
 	Company struct {
 		Type string `json:"type"`
@@ -68,13 +69,12 @@ func fetchNodesFromURL(rawURL string) ([]string, error) {
 	return nodes, nil
 }
 
-// ====================== 调用 API 检测，带 3 次指数退避 + 完整调试 ======================
+// ====================== 调用 API 检测，带重试 + 完整调试 ======================
 func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 	api := fmt.Sprintf(
 		"https://check.xn--xg8h.netlib.re/check?proxy=%s&token=%s",
 		url.QueryEscape(proxyStr), apiToken,
 	)
-	// 调试：打印完整请求 URL
 	fmt.Printf("检测节点 → %s\n", api)
 
 	client := &http.Client{Timeout: 15 * time.Second}
@@ -91,27 +91,22 @@ func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 		} else {
 			defer resp.Body.Close()
 			bodyBytes, _ := io.ReadAll(resp.Body)
-
-			// 调试：打印 API 原始返回（最重要！）
 			fmt.Printf("API 原始返回 (%d/%d):\n%s\n", attempt, maxRetries, string(bodyBytes))
 
-			// 解析 JSON
 			err = json.Unmarshal(bodyBytes, &result)
 			if err != nil {
 				fmt.Printf("JSON 解析失败 (%d/%d): %v\n", attempt, maxRetries, err)
 				continue
 			}
-
 			if result.Success {
-				break // 成功，退出重试
+				break
 			} else {
 				fmt.Printf("节点无效 (%d/%d): %s\n", attempt, maxRetries, proxyStr)
 			}
 		}
 
-		// 重试等待
 		if attempt < maxRetries {
-			wait := baseDelay * (1 << (attempt - 1)) // 2, 4, 8 秒
+			wait := baseDelay * (1 << (attempt - 1))
 			fmt.Printf("等待 %v 后重试...\n", wait)
 			time.Sleep(wait)
 		}
@@ -131,26 +126,66 @@ func main() {
 		os.Exit(1)
 	}
 
-	// ====================== 1. 下载节点 + 调试 ======================
+	// ====================== 1. 下载 + 自动提取 + 去重 ======================
 	nodes, err := fetchNodesFromURL(nodesURL)
 	if err != nil {
 		fmt.Println("下载节点列表失败:", err)
 		os.Exit(1)
 	}
 
-	// 调试：打印节点数量 + 前几条
-	fmt.Printf("共下载到 %d 个节点\n", len(nodes))
-	if len(nodes) > 0 {
-		fmt.Println("前 3 条节点示例:")
-		for i := 0; i < 3 && i < len(nodes); i++ {
-			fmt.Printf("  [%d] %s\n", i+1, nodes[i])
+	var cleanNodes []string
+	seen := make(map[string]bool)
+
+	for _, raw := range nodes {
+		raw = strings.TrimSpace(raw)
+		if raw == "" {
+			continue
 		}
-	} else {
-		fmt.Println("警告：节点列表为空！")
+
+		var proxy string
+		if strings.Contains(raw, "#") {
+			parts := strings.Split(raw, "#")
+			proxy = parts[0]
+			fmt.Printf("提取代理 ← %s (原: %s)\n", proxy, raw)
+		} else if strings.HasPrefix(raw, "socks5://") || strings.HasPrefix(raw, "http://") {
+			proxy = raw
+			fmt.Printf("标准代理 ← %s\n", proxy)
+		} else {
+			fmt.Printf("跳过非法: %s\n", raw)
+			continue
+		}
+
+		if !seen[proxy] {
+			seen[proxy] = true
+			cleanNodes = append(cleanNodes, proxy)
+		} else {
+			fmt.Printf("重复跳过: %s\n", proxy)
+		}
+	}
+
+	nodes = cleanNodes
+	fmt.Printf("处理完成：共提取 %d 个唯一代理节点\n", len(nodes))
+
+	if len(nodes) == 0 {
+		sendTelegramMessage(botToken, chatId, "本次扫描无有效代理节点")
+		return
+	}
+
+	// 打印前3个
+	fmt.Println("前 3 条有效节点:")
+	for i := 0; i < 3 && i < len(nodes); i++ {
+		fmt.Printf("  [%d] %s\n", i+1, nodes[i])
 	}
 
 	// ====================== 2. 检测节点 ======================
-	var good []string
+	type NodeResult struct {
+		Line    string
+		Country string
+		Delay   float64
+	}
+
+	var results []NodeResult
+
 	for _, node := range nodes {
 		resp, err := checkProxy(node, apiToken)
 		if err != nil || !resp.Success {
@@ -158,26 +193,49 @@ func main() {
 			continue
 		}
 
-		// 判断是否为 ISP
+		// ISP 判断
 		if resp.Company.Type != "isp" && resp.ASN.Type != "isp" {
 			fmt.Printf("不是 ISP，跳过: %s\n", node)
 			continue
 		}
 
-		// 格式化：socks5://user:pass@ip:port#TR
+		// 延迟过滤（< 1000ms）
+		if resp.Delay > 1000 {
+			fmt.Printf("延迟过高 %.0fms，跳过: %s\n", resp.Delay, node)
+			continue
+		}
+
 		line := fmt.Sprintf("%s#%s", resp.Proxy, resp.Country)
-		fmt.Printf("有效节点: %s\n", line)
-		good = append(good, line)
+		fmt.Printf("有效节点: %s (延迟: %.0fms)\n", line, resp.Delay)
+
+		results = append(results, NodeResult{
+			Line:    line,
+			Country: resp.Country,
+			Delay:   resp.Delay,
+		})
 	}
 
-	// ====================== 3. 统计 + 发送 ======================
-	fmt.Printf("扫描完成：共 %d 个节点，%d 个有效\n", len(nodes), len(good))
+	// ====================== 3. 按国家排序 ======================
+	sort.Slice(results, func(i, j int) bool {
+		if results[i].Country == results[j].Country {
+			return results[i].Delay < results[j].Delay
+		}
+		return results[i].Country < results[j].Country
+	})
+
+	var good []string
+	for _, r := range results {
+		good = append(good, r.Line)
+	}
+
+	// ====================== 4. 统计 + 发送 ======================
+	fmt.Printf("扫描完成：共 %d 个节点，%d 个有效（延迟<1000ms，ISP）\n", len(nodes), len(good))
 
 	if len(good) == 0 {
 		sendTelegramMessage(botToken, chatId, "本次扫描无有效代理节点")
 		return
 	}
 
-	text := "可用代理列表：\n" + strings.Join(good, "\n")
+	text := "可用代理列表（按国家排序）：\n" + strings.Join(good, "\n")
 	sendTelegramMessage(botToken, chatId, text)
 }
