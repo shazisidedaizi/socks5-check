@@ -1,4 +1,4 @@
-name: Proxy Checker Test
+name: Proxy Checker
 
 concurrency:
   group: proxy-checker
