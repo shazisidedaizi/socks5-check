@@ -79,7 +79,7 @@ func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 		url.QueryEscape(proxyStr), apiToken,
 	)
 
-	client := &http.Client{Timeout: 15 * time.Second}
+	client := &http.Client{Timeout: 25 * time.Second}
 	var result CheckResp
 	var err error
 	maxRetries := 3
@@ -226,12 +226,48 @@ func main() {
 			}
 
 			if addr != "" {
-				fmt.Println(">>> 准备对以下节点进行蜜罐检测:", node)
-				isHoney, honeyReason := checkSocks5Honeypot(addr)
-				if isHoney {
-					fmt.Printf("[蜜罐] %s -> %s\n", node, honeyReason)
-					return
-				}
+    			var finalIsHoney bool = false
+    			var finalReason string = "行为正常"
+    			var stableCount int = 0  // 连续几次稳定结果相同
+
+    			for attempt := 0; attempt < 5; attempt++ {  // 建议 5 次
+        			isHoney, reason := checkSocks5Honeypot(addr)
+
+        			// 如果是连接类错误，直接重试，不计数
+        			if strings.Contains(reason, "无法连接") || 
+           			   strings.Contains(reason, "握手发送失败") || 
+           			   strings.Contains(reason, "未返回握手响应") {
+            			time.Sleep(time.Duration(2<<attempt) * time.Second)
+            			continue
+        			}
+
+        			// 只要有一次明确检测到蜜罐特征，立即判定为蜜罐（最严格）
+        			if isHoney {
+            			finalIsHoney = true
+            			finalReason = reason
+            			break  // 发现蜜罐就立刻停止，不给它翻盘机会
+        			}
+
+        			// 只有连续多次都是“正常”才相信它是好的
+        			if reason == "非标准 SOCKS5 或行为正常" {
+            			stableCount++
+            			if stableCount >= 3 {  // 连续 3 次正常才放行
+                			break
+            			}
+        			}
+
+        			time.Sleep(1 * time.Second)
+    			}
+
+    			if finalIsHoney {
+        			fmt.Printf("[蜜罐] %s -> %s\n", node, finalReason)
+        			return
+    			}
+
+    			if stableCount < 3 {
+        			fmt.Printf("[不稳定] %s -> 检测不一致或连接不稳，放弃\n", node)
+        			return
+    			}
 			}
 
 			resp, err := checkProxy(node, apiToken)
