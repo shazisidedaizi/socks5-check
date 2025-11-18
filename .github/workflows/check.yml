@@ -1,5 +1,9 @@
 name: Proxy Checker
 
+concurrency:
+  group: proxy-checker
+  cancel-in-progress: true
+  
 on:
   workflow_dispatch:  # 手动触发
 
