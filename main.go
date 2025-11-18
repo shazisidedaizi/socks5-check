@@ -113,7 +113,7 @@ func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 func checkSocks5Honeypot(proxyAddr string) (bool, string) {
 	start := time.Now()
 
-	conn, err := net.DialTimeout("tcp", proxyAddr, 3*time.Second)
+	conn, err := net.DialTimeout("tcp", proxyAddr, 5*time.Second)
 	if err != nil {
 		return false, "无法连接节点"
 	}
