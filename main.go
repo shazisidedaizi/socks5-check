@@ -170,10 +170,10 @@ func main() {
 	botToken := os.Getenv("BOT_TOKEN")
 	chatId := os.Getenv("CHAT_ID")
 	apiToken := os.Getenv("API_TOKEN")
-	nodesFile := os.Getenv("NODES_FILE") // 输入节点列表文件，每行一个节点
+	nodesFile := os.Getenv("NODES_URL") // 输入节点列表文件，每行一个节点
 
 	if botToken == "" || chatId == "" || apiToken == "" || nodesFile == "" {
-		fmt.Println("缺少必要的环境变量：BOT_TOKEN CHAT_ID API_TOKEN NODES_FILE")
+		fmt.Println("缺少必要的环境变量：BOT_TOKEN CHAT_ID API_TOKEN NODES_URL")
 		os.Exit(1)
 	}
 
