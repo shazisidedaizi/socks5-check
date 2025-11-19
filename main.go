@@ -18,8 +18,8 @@ import (
 
 // ====================== API 结果结构 ======================
 type CheckResp struct {
-	Success bool    `json:"success"`
-	Proxy   string  `json:"proxy"`
+	Success bool `json:"success"`
+	Proxy   string `json:"proxy"`
 	Delay   float64 `json:"elapsed_ms"`
 	Company struct {
 		Type string `json:"type"`
@@ -52,13 +52,11 @@ func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 		"https://check.xn--xg8h.netlib.re/check?proxy=%s&token=%s",
 		url.QueryEscape(proxyStr), apiToken,
 	)
-
 	client := &http.Client{Timeout: 25 * time.Second}
 	var result CheckResp
 	var err error
 	maxRetries := 3
 	baseDelay := 2 * time.Second
-
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		resp, e := client.Get(api)
 		if e != nil {
@@ -66,13 +64,11 @@ func checkProxy(proxyStr, apiToken string) (CheckResp, error) {
 			time.Sleep(baseDelay * (1 << (attempt - 1)))
 			continue
 		}
-
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-
 		err = json.Unmarshal(bodyBytes, &result)
 		if err != nil {
-			time.Sleep(baseDelay * (1 << (attempt - 1)))
+			time.Sleep(baseDelay * (attempt - 1)))
 			continue
 		}
 		if result.Success {
@@ -100,7 +96,6 @@ func checkSocks5Honeypot(rawNode string) (bool, string) {
 	if addr == "" {
 		return false, "非 SOCKS5"
 	}
-
 	conn, err := net.DialTimeout("tcp", addr, 5*time.Second)
 	if err != nil {
 		return false, "无法连接节点"
@@ -108,28 +103,23 @@ func checkSocks5Honeypot(rawNode string) (bool, string) {
 	defer conn.Close()
 
 	start := time.Now()
-
 	// VER=5, NMETHODS=1, NO_AUTH
 	_, err = conn.Write([]byte{0x05, 0x01, 0x00})
 	if err != nil {
 		return false, "握手发送失败"
 	}
-
 	conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	method := make([]byte, 2)
 	_, err = conn.Read(method)
 	if err != nil {
 		return false, "未返回握手响应"
 	}
-
 	if method[0] != 0x05 {
 		return true, "VER 不是 0x05，像蜜罐"
 	}
-
 	if method[1] == 0x02 {
 		return false, "需要认证的正常 SOCKS5"
 	}
-
 	if method[1] != 0x00 {
 		return false, "不支持的认证类型（非蜜罐）"
 	}
@@ -139,14 +129,12 @@ func checkSocks5Honeypot(rawNode string) (bool, string) {
 	if err != nil {
 		return false, "发送假请求失败"
 	}
-
 	resp := make([]byte, 10)
 	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
 	n, _ := conn.Read(resp)
-
 	elapsed := time.Since(start).Milliseconds()
-
 	if elapsed <= 20 {
+		<= 20 {
 		return true, "响应过快(<20ms)，蜜罐特征"
 	}
 	if n >= 2 && resp[1] == 0x00 {
@@ -161,7 +149,6 @@ func checkSocks5Honeypot(rawNode string) (bool, string) {
 	if n == 0 {
 		return true, "空响应，蜜罐概率高"
 	}
-
 	return false, "正常 SOCKS5"
 }
 
@@ -170,22 +157,41 @@ func main() {
 	botToken := os.Getenv("BOT_TOKEN")
 	chatId := os.Getenv("CHAT_ID")
 	apiToken := os.Getenv("API_TOKEN")
-	nodesFile := os.Getenv("NODES_URL") // 输入节点列表文件，每行一个节点
+	nodesFile := os.Getenv("NODES_URL") // 现在支持 http/https 网址或 https:// 开头的远程文件
 
 	if botToken == "" || chatId == "" || apiToken == "" || nodesFile == "" {
 		fmt.Println("缺少必要的环境变量：BOT_TOKEN CHAT_ID API_TOKEN NODES_URL")
 		os.Exit(1)
 	}
 
-	file, err := os.Open(nodesFile)
-	if err != nil {
-		fmt.Println("打开节点文件失败:", err)
-		os.Exit(1)
+	// ==================== 新增：支持从 URL 下载节点列表 ====================
+	var scanner *bufio.Scanner
+	if strings.HasPrefix(strings.ToLower(nodesFile), "http://") || strings.HasPrefix(strings.ToLower(nodesFile), "https://") {
+		// 远程 URL
+		resp, err := http.Get(nodesFile)
+		if err != nil {
+			fmt.Printf("下载节点列表失败: %v\n", err)
+			os.Exit(1)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			fmt.Printf("下载节点列表失败，HTTP %d\n", resp.StatusCode)
+			os.Exit(1)
+		}
+		scanner = bufio.NewScanner(resp.Body)
+	} else {
+		// 原来本地文件的方式（兼容旧用法）
+		file, err := os.Open(nodesFile)
+		if err != nil {
+			fmt.Println("打开节点文件失败:", err)
+			os.Exit(1)
+		}
+		defer file.Close()
+		scanner = bufio.NewScanner(file)
 	}
-	defer file.Close()
+	// ====================================================================
 
 	var nodes []string
-	scanner := bufio.NewScanner(file)
 	seen := make(map[string]bool)
 	for scanner.Scan() {
 		raw := strings.TrimSpace(scanner.Text())
@@ -194,6 +200,10 @@ func main() {
 		}
 		seen[raw] = true
 		nodes = append(nodes, raw)
+	}
+	if err := scanner.Err(); err != nil {
+		fmt.Println("读取节点列表出错:", err)
+		os.Exit(1)
 	}
 
 	fmt.Printf("加载完成：共 %d 个唯一节点\n", len(nodes))
@@ -251,6 +261,7 @@ func main() {
 	}
 	wg.Wait()
 
+	// 排序：先按国家，再按延迟
 	sort.Slice(results, func(i, j int) bool {
 		if results[i].Country == results[j].Country {
 			return results[i].Delay < results[j].Delay
